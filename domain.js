@@ -1,0 +1,58 @@
+import { CONFIG } from './variant-config.js';
+export const STATES={WAITING_EXTERNAL:'WAITING_EXTERNAL',ACTION_REQUIRED:'ACTION_REQUIRED',UNCONFIRMED:'UNCONFIRMED',RESOLVED:'RESOLVED'};
+export const LABELS={WAITING_EXTERNAL:'Waiting on someone else',ACTION_REQUIRED:'You need to act',UNCONFIRMED:'Still unconfirmed',RESOLVED:'Resolved'};
+export const OWNERS=['USER','COUNTERPARTY','UNKNOWN'];
+export const STAGES=['APPLYING','SUBMITTED','WAITING','INTERVIEW','ASSESSMENT','OFFER','CLOSED','UNKNOWN'];
+export const CATEGORIES=CONFIG.categories;
+export const CORRECTION_CATEGORIES=['wrong_amount','wrong_person','wrong_counterparty','wrong_state','wrong_stage','wrong_date','wrong_next_actor','wrong_commitment','missing_evidence','missed_dependency','missed_deadline','wrong_next_action','unsupported_assumption','duplicate_thread','missing_context','other'];
+export function uid(prefix='id'){return `${prefix}_${crypto.randomUUID?.()||Math.random().toString(36).slice(2)+Date.now().toString(36)}`}
+export function todayISO(d=new Date()){const y=d.getFullYear(),m=String(d.getMonth()+1).padStart(2,'0'),day=String(d.getDate()).padStart(2,'0');return `${y}-${m}-${day}`}
+export function daysBetween(a,b){const x=new Date(`${a}T12:00:00Z`),y=new Date(`${b}T12:00:00Z`);return Math.floor((y-x)/86400000)}
+function text(v,max=5000){return String(v??'').replace(/\s+/g,' ').trim().slice(0,max)}
+function quote(v){return text(v,1200).toLowerCase().replace(/[“”]/g,'"').replace(/[‘’]/g,"'")}
+export function isSupportedQuote(q,evidence){const n=quote(q);return n.length>=3&&evidence.some(x=>quote(x).includes(n))}
+function validDate(v){return v===null||(/^\d{4}-\d{2}-\d{2}$/.test(v||'')&&!Number.isNaN(Date.parse(`${v}T12:00:00Z`)))}
+function supportedRecords(values,evidence,fields=['evidenceQuote']){return (Array.isArray(values)?values:[]).map(v=>{if(!v||typeof v!=='object')return null;return fields.every(f=>isSupportedQuote(v[f],evidence))?v:null}).filter(Boolean)}
+export function moneyLabel(minor,currency='QAR'){if(minor==null)return'';try{return new Intl.NumberFormat(undefined,{style:'currency',currency,maximumFractionDigits:2}).format(Number(minor)/100)}catch{return `${currency} ${(Number(minor)/100).toFixed(2)}`}}
+export function validateCandidate(input,evidenceTexts=[]){
+  if(!input||typeof input!=='object')throw new Error('invalid_candidate');
+  const evidence=evidenceTexts.map(x=>text(x,12000)).filter(Boolean);if(!evidence.length)throw new Error('missing_evidence');
+  const m=input.matter||{}, s=input.currentState||{};
+  const category=Object.hasOwn(CATEGORIES,m.category)?m.category:'other';
+  const amountSupported=CONFIG.hasAmount&&m.amountMinor!=null&&isSupportedQuote(m.amountEvidenceQuote,evidence);
+  const amountMinor=amountSupported&&Number.isInteger(Number(m.amountMinor))&&Number(m.amountMinor)>0?Number(m.amountMinor):null;
+  const currency=CONFIG.hasAmount&&amountMinor!=null&&/^[A-Z]{3}$/.test(m.currency||'')?m.currency:'QAR';
+  const counterparty=isSupportedQuote(m.counterpartyEvidenceQuote,evidence)?text(m.counterparty,240):'';
+  let stage='UNKNOWN';
+  if(CONFIG.hasStage&&STAGES.includes(m.stage)&&m.stage!=='UNKNOWN'&&isSupportedQuote(m.stageEvidenceQuote,evidence))stage=m.stage;
+  const ownerSupported=isSupportedQuote(s.ownerEvidenceQuote,evidence);
+  const ownerType=ownerSupported&&OWNERS.includes(s.ownerType)?s.ownerType:'UNKNOWN';
+  const ownerLabel=ownerSupported?text(s.ownerLabel,240):'';
+  const dateSupported=s.expectedDate&&validDate(s.expectedDate)&&isSupportedQuote(s.expectedDateEvidenceQuote,evidence);
+  const expectedDate=dateSupported?s.expectedDate:null;
+  const resolutionSupported=isSupportedQuote(s.resolutionEvidenceQuote,evidence);
+  const requested=Object.hasOwn(STATES,s.status)?s.status:STATES.UNCONFIRMED;
+  const status=requested===STATES.RESOLVED&&!resolutionSupported?STATES.UNCONFIRMED:requested;
+  const facts=supportedRecords(input.facts,evidence).map(f=>({kind:['claim','event','commitment','decision','observation'].includes(f.kind)?f.kind:'claim',status:f.status==='EVIDENCED'?'EVIDENCED':'USER_PROVIDED',text:text(f.text,1200),evidenceQuote:text(f.evidenceQuote,1200)}));
+  const actors=supportedRecords(input.actors,evidence);
+  const events=supportedRecords(input.events,evidence);
+  const commitments=supportedRecords(input.commitments,evidence);
+  const decisions=supportedRecords(input.decisions,evidence);
+  const provenance=supportedRecords(input.provenance,evidence);
+  const contradictions=supportedRecords(input.contradictions,evidence,['evidenceQuoteA','evidenceQuoteB']);
+  const uncertainties=(Array.isArray(input.uncertainties)?input.uncertainties:[]).map(x=>({text:text(x?.text,1200),reason:text(x?.reason,1200)})).filter(x=>x.text);
+  if(CONFIG.hasAmount&&m.amountMinor!=null&&!amountSupported)uncertainties.push({text:'Amount is not directly supported by supplied evidence.',reason:'Unsupported amount evidence'});
+  if(m.counterparty&&!counterparty)uncertainties.push({text:'Counterparty / organization is not directly supported by supplied evidence.',reason:'Unsupported counterparty evidence'});
+  if(CONFIG.hasStage&&m.stage&&m.stage!=='UNKNOWN'&&stage==='UNKNOWN')uncertainties.push({text:'Stage is not directly supported by supplied evidence.',reason:'Unsupported stage evidence'});
+  if(s.expectedDate&&!expectedDate)uncertainties.push({text:'Expected date is not directly supported by supplied evidence.',reason:'Unsupported date evidence'});
+  if(requested===STATES.RESOLVED&&!resolutionSupported)uncertainties.push({text:'Resolution is not confirmed by the supplied evidence.',reason:'Resolution requires an explicit completion event'});
+  return {matter:{title:text(m.title,240)||'Untitled matter',category,amountMinor,currency:CONFIG.hasAmount?currency:'',counterparty,stage,amountEvidenceQuote:amountSupported?text(m.amountEvidenceQuote,1200):'',counterpartyEvidenceQuote:counterparty?text(m.counterpartyEvidenceQuote,1200):'',stageEvidenceQuote:stage!=='UNKNOWN'?text(m.stageEvidenceQuote,1200):''},currentState:{status,summary:text(s.summary,1200)||'Current state requires review.',ownerType,ownerLabel,expectedDate,nextAction:text(s.nextAction,800)||'Clarify the next transition.',ownerEvidenceQuote:ownerSupported?text(s.ownerEvidenceQuote,1200):'',expectedDateEvidenceQuote:expectedDate?text(s.expectedDateEvidenceQuote,1200):'',resolutionEvidenceQuote:resolutionSupported?text(s.resolutionEvidenceQuote,1200):''},facts,actors,events,commitments,decisions,uncertainties,contradictions,missingConfirmations:(Array.isArray(input.missingConfirmations)?input.missingConfirmations:[]).map(x=>text(x,800)).filter(Boolean),dependencies:(Array.isArray(input.dependencies)?input.dependencies:[]).map(x=>({from:text(x?.from,400),to:text(x?.to,400),relation:text(x?.relation,400)})).filter(x=>x.from&&x.to),resolutionCriteria:(Array.isArray(input.resolutionCriteria)?input.resolutionCriteria:[]).map(x=>text(x,800)).filter(Boolean),provenance,validation:{supportedEvidenceLinks:facts.length+actors.length+events.length+commitments.length+decisions.length+provenance.length+contradictions.length,evidenceCount:evidence.length}};
+}
+export function canonicalProjection(c){return {category:c.matter.category,title:c.matter.title,counterpartyLabel:c.matter.counterparty,amountMinor:c.matter.amountMinor,currency:c.matter.currency,stage:c.matter.stage,state:c.currentState.status,nextActor:c.currentState.ownerType,attentionDate:c.currentState.expectedDate,nextActionText:c.currentState.nextAction,summary:c.currentState.summary,uncertainties:c.uncertainties,missingConfirmations:c.missingConfirmations,resolutionCriteria:c.resolutionCriteria}}
+export function deriveVisibleState(item,today=todayISO()){if(item.state!==STATES.RESOLVED&&item.attentionDate&&item.attentionDate<today)return STATES.UNCONFIRMED;return item.state}
+export function nextActionFor(item){if(item.nextActionText)return item.nextActionText;const s=deriveVisibleState(item);if(s===STATES.RESOLVED)return'Nothing else needed.';if(s===STATES.UNCONFIRMED)return'Check whether the expected event actually happened.';if(s===STATES.ACTION_REQUIRED)return'You need to act next.';if(s===STATES.WAITING_EXTERNAL)return item.attentionDate?`Wait until ${item.attentionDate}, then check if needed.`:'Waiting on someone else.';return'Clarify the next move.'}
+export function aggregate(items,today=todayISO()){const open=items.filter(x=>!x.deletedAt&&x.state!==STATES.RESOLVED);return {openCount:open.length,amountMinor:CONFIG.hasAmount?open.filter(x=>x.currency==='QAR'&&x.amountMinor!=null).reduce((s,x)=>s+Number(x.amountMinor||0),0):0,moneyCount:open.filter(x=>x.amountMinor!=null).length,waitingExternalCount:open.filter(x=>deriveVisibleState(x,today)===STATES.WAITING_EXTERNAL).length,attentionThisWeekCount:open.filter(x=>x.attentionDate&&daysBetween(today,x.attentionDate)>=0&&daysBetween(today,x.attentionDate)<=7).length,missingConfirmationCount:open.filter(x=>(x.missingConfirmations||[]).length>0||deriveVisibleState(x,today)===STATES.UNCONFIRMED).length,oldestOpenAgeDays:open.length?Math.max(...open.map(x=>Math.max(0,daysBetween(String(x.createdAt).slice(0,10),today)))):null}}
+export function buildDelta(previous,candidate){if(!previous)return{changed:['New matter reconstructed.'],stillOpen:candidate.currentState.status===STATES.RESOLVED?[]:[candidate.currentState.summary],resolved:candidate.currentState.status===STATES.RESOLVED?[candidate.currentState.summary]:[],newUncertainty:candidate.uncertainties.map(x=>x.text),ownershipChanged:[],whatMattersNow:candidate.currentState.nextAction};const n=canonicalProjection(candidate),changed=[],ownershipChanged=[];if(previous.state!==n.state)changed.push(`State: ${LABELS[previous.state]||previous.state} → ${LABELS[n.state]||n.state}`);if((previous.attentionDate||null)!==(n.attentionDate||null))changed.push(`Relevant date: ${previous.attentionDate||'none'} → ${n.attentionDate||'none'}`);if(CONFIG.hasAmount&&((previous.amountMinor||null)!==(n.amountMinor||null)||(previous.currency||'QAR')!==n.currency))changed.push(`Amount: ${moneyLabel(previous.amountMinor,previous.currency||'QAR')||'unknown'} → ${moneyLabel(n.amountMinor,n.currency)||'unknown'}`);if(CONFIG.hasStage&&(previous.stage||'UNKNOWN')!==n.stage)changed.push(`Stage: ${previous.stage||'UNKNOWN'} → ${n.stage}`);if((previous.counterpartyLabel||'')!==n.counterpartyLabel)changed.push(`Counterparty: ${previous.counterpartyLabel||'unknown'} → ${n.counterpartyLabel||'unknown'}`);if((previous.nextActor||'UNKNOWN')!==n.nextActor)ownershipChanged.push(`${previous.nextActor||'UNKNOWN'} → ${n.nextActor}`);const pu=new Set((previous.uncertainties||[]).map(x=>typeof x==='string'?x:x.text));return{changed,stillOpen:n.state===STATES.RESOLVED?[]:[n.summary],resolved:n.state===STATES.RESOLVED?[n.summary]:[],newUncertainty:n.uncertainties.map(x=>x.text).filter(x=>!pu.has(x)),ownershipChanged,whatMattersNow:n.nextActionText}}
+export function safeShareSnapshot(items,referralId=uid('ref')){const a=aggregate(items);return{shareId:referralId,openCount:a.openCount,itemsWithMoneyCount:a.moneyCount,waitingExternalCount:a.waitingExternalCount,attentionThisWeekCount:a.attentionThisWeekCount,missingConfirmationCount:a.missingConfirmationCount,oldestOpenAgeDays:a.oldestOpenAgeDays,variant:CONFIG.code,createdAt:new Date().toISOString()}}
+export function encodeShare(s){return btoa(unescape(encodeURIComponent(JSON.stringify(s)))).replace(/\+/g,'-').replace(/\//g,'_').replace(/=+$/,'')}
+export function decodeShare(token){try{let t=token.replace(/-/g,'+').replace(/_/g,'/');while(t.length%4)t+='=';const x=JSON.parse(decodeURIComponent(escape(atob(t))));if(x.variant!==CONFIG.code)return null;return x}catch{return null}}

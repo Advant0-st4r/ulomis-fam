@@ -1,0 +1,22 @@
+{
+  "name": "ulomis-households",
+  "version": "4.2.0",
+  "private": true,
+  "type": "module",
+  "description": "Ulomis Households: Netlify Identity + Netlify Database + bounded LCE household reconstruction.",
+  "scripts": {
+    "build": "node scripts/validate.mjs && node scripts/test-domain.mjs && node scripts/test-llm-contract.mjs && vite build",
+    "validate": "node scripts/validate.mjs && node scripts/test-domain.mjs && node scripts/test-llm-contract.mjs",
+    "dev": "netlify dev"
+  },
+  "engines": {
+    "node": ">=20.19"
+  },
+  "dependencies": {
+    "@netlify/database": "1.1.0",
+    "@netlify/identity": "1.2.0"
+  },
+  "devDependencies": {
+    "vite": "8.1.5"
+  }
+}
